@@ -36,10 +36,13 @@ import java.util.Map;
 import java.util.Set;
 import java.util.Vector;
 
-import net.rubyeye.xmemcached.XMemcachedClientBuilder;
-// We also use `net.rubyeye.xmemcached.MemcachedClient`; it is not imported
+import net.spy.memcached.ConnectionFactoryBuilder;
+import net.spy.memcached.FailureMode;
+// We also use `net.spy.memcached.MemcachedClient`; it is not imported
 // explicitly and referred to with its full path to avoid conflicts with the
 // class of the same name in this file.
+import net.spy.memcached.internal.GetFuture;
+import net.spy.memcached.internal.OperationFuture;
 
 import org.codehaus.jackson.JsonFactory;
 import org.codehaus.jackson.JsonGenerator;
@@ -92,22 +95,24 @@ public class MemcachedClient extends DB {
   public static final String DEFAULT_OP_TIMEOUT = "60000";
 
   public static final String FAILURE_MODE_PROPERTY = "memcached.failureMode";
-  public static final String FAILURE_MODE_PROPERTY_DEFAULT = "true";
+  public static final FailureMode FAILURE_MODE_PROPERTY_DEFAULT =
+      FailureMode.Redistribute;
 
-  public static final String CONNECTION_POOL_PROPERTY = "memcached.connectionPool";
-  public static final String DEFAULT_CONNECTION_POOL = "4";
+  public static final String PROTOCOL_PROPERTY = "memcached.protocol";
+  public static final ConnectionFactoryBuilder.Protocol DEFAULT_PROTOCOL =
+      ConnectionFactoryBuilder.Protocol.TEXT;
 
   /**
    * The MemcachedClient implementation that will be used to communicate
    * with the memcached server.
    */
-  private net.rubyeye.xmemcached.MemcachedClient client;
+  private net.spy.memcached.MemcachedClient client;
 
   /**
    * @returns Underlying Memcached protocol client, implemented by
    *     SpyMemcached.
    */
-  protected net.rubyeye.xmemcached.MemcachedClient memcachedClient() {
+  protected net.spy.memcached.MemcachedClient memcachedClient() {
     return client;
   }
 
@@ -115,7 +120,6 @@ public class MemcachedClient extends DB {
   public void init() throws DBException {
     try {
       client = createMemcachedClient();
-      client.setOptimizeGet( false );
       checkOperationStatus = Boolean.parseBoolean(
           getProperties().getProperty(CHECK_OPERATION_STATUS_PROPERTY,
                                       CHECK_OPERATION_STATUS_DEFAULT));
@@ -130,8 +134,28 @@ public class MemcachedClient extends DB {
     }
   }
 
-  protected net.rubyeye.xmemcached.MemcachedClient createMemcachedClient()
+  protected net.spy.memcached.MemcachedClient createMemcachedClient()
       throws Exception {
+    ConnectionFactoryBuilder connectionFactoryBuilder =
+        new ConnectionFactoryBuilder();
+
+    connectionFactoryBuilder.setReadBufferSize(Integer.parseInt(
+        getProperties().getProperty(READ_BUFFER_SIZE_PROPERTY,
+                                    DEFAULT_READ_BUFFER_SIZE)));
+
+    connectionFactoryBuilder.setOpTimeout(Integer.parseInt(
+        getProperties().getProperty(OP_TIMEOUT_PROPERTY, DEFAULT_OP_TIMEOUT)));
+
+    String protocolString = getProperties().getProperty(PROTOCOL_PROPERTY);
+    connectionFactoryBuilder.setProtocol(
+        protocolString == null ? DEFAULT_PROTOCOL
+                         : ConnectionFactoryBuilder.Protocol.valueOf(protocolString.toUpperCase()));
+
+    String failureString = getProperties().getProperty(FAILURE_MODE_PROPERTY);
+    connectionFactoryBuilder.setFailureMode(
+        failureString == null ? FAILURE_MODE_PROPERTY_DEFAULT
+                              : FailureMode.valueOf(failureString));
+
     // Note: this only works with IPv4 addresses due to its assumption of
     // ":" being the separator of hostname/IP and port; this is not the case
     // when dealing with IPv6 addresses.
@@ -149,30 +173,8 @@ public class MemcachedClient extends DB {
       }
       addresses.add(new InetSocketAddress(host, port));
     }
-
-    XMemcachedClientBuilder builder = new XMemcachedClientBuilder(addresses);
-
-    //builder.setReadBufferSize(Integer.parseInt(
-    //    getProperties().getProperty(READ_BUFFER_SIZE_PROPERTY,
-    //                                DEFAULT_READ_BUFFER_SIZE)));
-
-    builder.setOpTimeout(Integer.parseInt(
-        getProperties().getProperty(OP_TIMEOUT_PROPERTY, DEFAULT_OP_TIMEOUT)));
-
-    //builder.setCommandFactory(new TextCommandFactory());
-
-    //String failureString = getProperties().getProperty(FAILURE_MODE_PROPERTY);
-    //builder.setFailureMode(
-    //    failureString == null ? FAILURE_MODE_PROPERTY_DEFAULT
-    //                          : FailureMode.valueOf(failureString));
-
-    builder.setFailureMode(Boolean.parseBoolean(
-        getProperties().getProperty(FAILURE_MODE_PROPERTY, FAILURE_MODE_PROPERTY_DEFAULT)));
-
-    builder.setConnectionPoolSize(Integer.parseInt(
-        getProperties().getProperty(CONNECTION_POOL_PROPERTY, DEFAULT_CONNECTION_POOL)));
-
-    return builder.build();
+    return new net.spy.memcached.MemcachedClient(
+        connectionFactoryBuilder.build(), addresses);
   }
 
   @Override
@@ -181,7 +183,8 @@ public class MemcachedClient extends DB {
       Map<String, ByteIterator> result) {
     key = createQualifiedKey(table, key);
     try {
-      Object document = memcachedClient().get(key);
+      GetFuture<Object> future = memcachedClient().asyncGet(key);
+      Object document = future.get();
       if (document != null) {
         fromJson((String) document, fields, result);
       }
@@ -204,11 +207,9 @@ public class MemcachedClient extends DB {
       String table, String key, Map<String, ByteIterator> values) {
     key = createQualifiedKey(table, key);
     try {
-      if(memcachedClient().set(key, objectExpirationTime, toJson(values))){
-        return Status.OK;
-      } else {
-        return Status.ERROR;
-      }
+      OperationFuture<Boolean> future =
+          memcachedClient().set(key, objectExpirationTime, toJson(values));
+      return getReturnCode(future);
     } catch (Exception e) {
       logger.error("Error updating value with key: " + key, e);
       return Status.ERROR;
@@ -220,11 +221,9 @@ public class MemcachedClient extends DB {
       String table, String key, Map<String, ByteIterator> values) {
     key = createQualifiedKey(table, key);
     try {
-      if(memcachedClient().add(key, objectExpirationTime, toJson(values))){
-        return Status.OK;
-      } else {
-        return Status.ERROR;
-      }
+      OperationFuture<Boolean> future =
+          memcachedClient().add(key, objectExpirationTime, toJson(values));
+      return getReturnCode(future);
     } catch (Exception e) {
       logger.error("Error inserting value", e);
       return Status.ERROR;
@@ -235,26 +234,32 @@ public class MemcachedClient extends DB {
   public Status delete(String table, String key) {
     key = createQualifiedKey(table, key);
     try {
-      if(memcachedClient().delete(key)){
-        return Status.OK;
-      } else {
-        return Status.ERROR;
-      }
+      OperationFuture<Boolean> future = memcachedClient().delete(key);
+      return getReturnCode(future);
     } catch (Exception e) {
       logger.error("Error deleting value", e);
       return Status.ERROR;
     }
   }
 
+  protected Status getReturnCode(OperationFuture<Boolean> future) {
+    if (!checkOperationStatus) {
+      return Status.OK;
+    }
+    if (future.getStatus().isSuccess()) {
+      return Status.OK;
+    } else if (TEMPORARY_FAILURE_MSG.equals(future.getStatus().getMessage())) {
+      return new Status("TEMPORARY_FAILURE", TEMPORARY_FAILURE_MSG);
+    } else if (CANCELLED_MSG.equals(future.getStatus().getMessage())) {
+      return new Status("CANCELLED_MSG", CANCELLED_MSG);
+    }
+    return new Status("ERROR", future.getStatus().getMessage());
+  }
+
   @Override
   public void cleanup() throws DBException {
     if (client != null) {
-      try{
-        memcachedClient().shutdown();
-      }
-      catch (IOException e) {
-        logger.error("Error shutdown memcached");
-      }
+      memcachedClient().shutdown(shutdownTimeoutMillis, MILLISECONDS);
     }
   }
 
