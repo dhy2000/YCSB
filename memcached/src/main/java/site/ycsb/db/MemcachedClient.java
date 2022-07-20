@@ -204,7 +204,7 @@ public class MemcachedClient extends DB {
       String table, String key, Map<String, ByteIterator> values) {
     key = createQualifiedKey(table, key);
     try {
-      if(memcachedClient().set(key, objectExpirationTime, toJson(values))){
+      if(memcachedClient().replace(key, objectExpirationTime, toJson(values))){
         return Status.OK;
       } else {
         return Status.ERROR;
