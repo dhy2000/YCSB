@@ -37,7 +37,8 @@ public class Measurements {
     HDRHISTOGRAM_AND_HISTOGRAM,
     HDRHISTOGRAM_AND_RAW,
     TIMESERIES,
-    RAW
+    RAW,
+    RAWSAMPLE
   }
 
   public static final String MEASUREMENT_TYPE_PROPERTY = "measurementtype";
@@ -101,6 +102,9 @@ public class Measurements {
     case "raw":
       measurementType = MeasurementType.RAW;
       break;
+    case "rawsample":
+      measurementType = MeasurementType.RAWSAMPLE;
+      break;
     default:
       throw new IllegalArgumentException("unknown " + MEASUREMENT_TYPE_PROPERTY + "=" + mTypeString);
     }
@@ -139,6 +143,8 @@ public class Measurements {
       return new OneMeasurementTimeSeries(name, props);
     case RAW:
       return new OneMeasurementRaw(name, props);
+    case RAWSAMPLE:
+      return new OneMeasurementRawSample(name, props);
     default:
       throw new AssertionError("Impossible to be here. Dead code reached. Bugs?");
     }
