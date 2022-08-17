@@ -171,7 +171,7 @@ public class OneMeasurementRawSample extends OneMeasurement {
 
     int rawOps = measurements.size();
     exporter.write(getName(), "Total Operations", totalOps);
-    if (totalOps > 0 && !noSummaryStats) {
+    if (rawOps > 0 && !noSummaryStats) {
       exporter.write(getName(),
           "Below is a summary of latency in microseconds:", -1);
       exporter.write(getName(), "Average",
